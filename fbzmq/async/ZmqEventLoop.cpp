@@ -7,7 +7,11 @@
 
 #include <fbzmq/async/ZmqEventLoop.h>
 
+#ifndef IS_BSD
 #include <sys/eventfd.h>
+#else
+#include <fcntl.h>
+#endif
 #include <unistd.h>
 
 #include <folly/Format.h>
@@ -28,6 +32,7 @@ ZmqEventLoop::ZmqEventLoop(
   latestActivityTs_.store(
       std::chrono::steady_clock::now().time_since_epoch().count());
 
+#ifndef IS_BSD
   // Create signal-fd for start/stop events
   if ((signalFd_ = eventfd(0 /* init-value */, 0 /* flags */)) < 0) {
     LOG(FATAL) << "ZmqEventLoop: Failed to create an eventfd.";
@@ -37,14 +42,22 @@ ZmqEventLoop::ZmqEventLoop(
   if ((callbackFd_ = eventfd(0 /* init-value */, EFD_NONBLOCK)) < 0) {
     LOG(FATAL) << "ZmqEventLoop: Failed to create an eventfd.";
   }
+  int callbackFd = callbackFd_;
+  int signalFd = signalFd_;
+#else
+  createPipeBsd(signalFds_);
+  createPipeBsd(callbackFds_);
 
+  int signalFd = signalFds_[0];
+  int callbackFd = callbackFds_[0];
+#endif
   // Attach callback on signal fd
-  addSocketFd(signalFd_, ZMQ_POLLIN, [this](int revents) noexcept {
+  addSocketFd(signalFd, ZMQ_POLLIN, [this, signalFd](int revents) noexcept {
     CHECK(revents & ZMQ_POLLIN);
 
     // Receive 8 byte integer
     uint64_t buf;
-    auto bytesRead = read(signalFd_, static_cast<void*>(&buf), sizeof(buf));
+    auto bytesRead = read(signalFd, static_cast<void*>(&buf), sizeof(buf));
     CHECK_EQ(sizeof(buf), bytesRead);
 
     VLOG(4) << "ZmqEventLoop: Received stop signal. Stopping thread.";
@@ -52,12 +65,12 @@ ZmqEventLoop::ZmqEventLoop(
   });
 
   // Attach callback on callback event fd
-  addSocketFd(callbackFd_, ZMQ_POLLIN, [this](int revents) noexcept {
+  addSocketFd(callbackFd, ZMQ_POLLIN, [this, callbackFd](int revents) noexcept {
     CHECK(revents & ZMQ_POLLIN);
 
     // Receive 8 byte integer
     uint64_t buf;
-    auto bytesRead = read(callbackFd_, static_cast<void*>(&buf), sizeof(buf));
+    auto bytesRead = read(callbackFd, static_cast<void*>(&buf), sizeof(buf));
     CHECK_EQ(sizeof(buf), bytesRead);
 
     // Process events
@@ -73,9 +86,40 @@ ZmqEventLoop::ZmqEventLoop(
 }
 
 ZmqEventLoop::~ZmqEventLoop() {
-  close(signalFd_);
+#ifndef IS_BSD
   close(callbackFd_);
+  close(signalFd_);
+#else
+  close(callbackFds_[0]);
+  close(callbackFds_[1]);
+  close(signalFds_[0]);
+  close(signalFds_[1]);
+#endif
 }
+
+#ifdef IS_BSD
+void
+ZmqEventLoop::createPipeBsd(int fds[]) {
+  if (pipe(fds) < 0) {
+    LOG(FATAL) << "ZmqEventLoop: Failed to create a pipe";
+  }
+  setNonBlockingFd(fds[0]);
+  setNonBlockingFd(fds[1]);
+  util::setFdCloExec(fds[0]);
+  util::setFdCloExec(fds[1]);
+}
+
+void
+ZmqEventLoop::setNonBlockingFd(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) {
+    LOG(FATAL) << "ZmqEventLoop: Failed to get fd flags";
+  }
+  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    LOG(FATAL) << "ZmqEventLoop: Failed to set fd O_NONBLOCK";
+  }
+}
+#endif
 
 void
 ZmqEventLoop::run() {
@@ -96,9 +140,14 @@ void
 ZmqEventLoop::stop() {
   CHECK(isRunning()) << "Attempt to stop a non-running thread";
 
+#ifndef IS_BSD
+  int signalFd = signalFd_;
+#else
+  int signalFd = signalFds_[1];
+#endif
   // Send signal on the signalFd_ (eventfd)
   uint64_t buf{1};
-  auto bytesWritten = write(signalFd_, static_cast<void*>(&buf), sizeof(buf));
+  auto bytesWritten = write(signalFd, static_cast<void*>(&buf), sizeof(buf));
   CHECK_EQ(sizeof(buf), bytesWritten);
 }
 
@@ -184,7 +233,12 @@ ZmqEventLoop::runInEventLoop(TimeoutCallback callback) {
 
   // Send signal on the callbackFd_ (eventfd)
   uint64_t buf{1};
-  auto bytesWritten = write(callbackFd_, static_cast<void*>(&buf), sizeof(buf));
+#ifndef IS_BSD
+  int callbackFd = callbackFd_;
+#else
+  int callbackFd = callbackFds_[1];
+#endif
+  auto bytesWritten = write(callbackFd, static_cast<void*>(&buf), sizeof(buf));
   CHECK_EQ(sizeof(buf), bytesWritten);
 }
 

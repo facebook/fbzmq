@@ -2,6 +2,15 @@
 
 #include "SystemMetrics.h"
 
+#if defined(IS_BSD) && defined(__APPLE__)
+#include <mach/task.h>
+#include <mach/mach_init.h>
+#elif defined(IS_BSD)
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#endif
+
 namespace fbzmq {
 
 /* Return RSS memory the process currently used from /proc/[pid]/status.
@@ -10,6 +19,7 @@ namespace fbzmq {
 */
 folly::Optional<size_t>
 SystemMetrics::getRSSMemBytes() {
+#if !defined(IS_BSD)
   folly::Optional<size_t> rss{folly::none};
   // match the line like: "VmRSS:      9028 kB"
   std::regex rssRegex("VmRSS:\\s+(\\d+)\\s+(\\w+)");
@@ -34,6 +44,16 @@ SystemMetrics::getRSSMemBytes() {
         << ex.what();
   }
   return rss;
+#elif !defined(__APPLE__)
+    struct rusage rusage;
+    getrusage(RUSAGE_SELF, &rusage);
+    return (size_t)(rusage.ru_maxrss * 1024);
+#else
+    struct task_basic_info t_info;
+    mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
+    task_info(current_task(), TASK_BASIC_INFO, (task_info_t)&t_info, &t_info_count);
+    return t_info.resident_size;
+#endif
 }
 
 /* Return CPU% the process used

@@ -65,6 +65,10 @@ folly::Expected<folly::Unit, Error> proxy(
 
 namespace util {
 
+#ifdef IS_BSD
+void setFdCloExec(int fd);
+#endif
+
 /**
  * Generate a crypto key pair
  */

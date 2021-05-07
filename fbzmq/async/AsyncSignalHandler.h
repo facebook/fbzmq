@@ -11,6 +11,15 @@
 
 #include <fbzmq/async/ZmqEventLoop.h>
 
+#ifdef IS_BSD
+#ifdef __APPLE__
+#define SIG_MAX __DARWIN_NSIG
+#else
+#define SIG_MAX NSIG
+#endif
+
+#endif
+
 namespace fbzmq {
 
 /**
@@ -84,6 +93,8 @@ class AsyncSignalHandler {
   AsyncSignalHandler(AsyncSignalHandler const&);
   AsyncSignalHandler& operator=(AsyncSignalHandler const&);
 
+  void setupSignal(int sig, bool isAdding);
+
   // event loop
   ZmqEventLoop* evl_{nullptr};
 
@@ -92,6 +103,10 @@ class AsyncSignalHandler {
 
   // registered signals
   sigset_t registeredSignals_;
+
+#ifdef IS_BSD
+  sig_t signalHandlers_[SIG_MAX] {};
+#endif
 };
 
 } // namespace fbzmq

@@ -6,6 +6,9 @@
  */
 
 #include <fbzmq/zmq/Common.h>
+#ifdef IS_BSD
+#include <fcntl.h>
+#endif
 
 namespace fbzmq {
 
@@ -61,6 +64,18 @@ proxy(void* frontend, void* backend, void* capture) {
 }
 
 namespace util {
+
+#ifdef IS_BSD
+void setFdCloExec(int fd) {
+  int flags = fcntl(fd, F_GETFD, 0);
+  if (flags < 0) {
+    LOG(FATAL) << "setFdCloExec: Failed to get fd flags";
+  }
+  if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+    LOG(FATAL) << "setFdCloExec: Failed to set fd FD_CLOEXEC";
+  }
+}
+#endif
 
 KeyPair
 genKeyPair() {

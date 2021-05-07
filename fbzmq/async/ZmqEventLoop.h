@@ -315,12 +315,22 @@ class ZmqEventLoop : public virtual Runnable, public folly::ScheduledExecutor {
    */
   void rebuildPollItems();
 
+#ifndef IS_BSD
   // Local eventfd for capturing stop signal
   int signalFd_{-1};
-
   // Local eventfd for capturing the signal from newly enqueued callbacks
   // from other threads
   int callbackFd_{-1};
+#else
+  // Local eventfd for capturing the signal from newly enqueued callbacks
+  // from other threads
+  int callbackFds_[2]{-1, -1};
+  // Local eventfd for capturing stop signal
+  int signalFds_[2]{-1, -1};
+
+  void setNonBlockingFd(int fd);
+  void createPipeBsd(int fds[]);
+#endif
 
   // Queue to hold externally enqueued events.
   folly::MPMCQueue<TimeoutCallback, std::atomic, true> callbackQueue_;
